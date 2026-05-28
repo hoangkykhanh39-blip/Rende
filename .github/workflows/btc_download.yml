@@ -1,0 +1,42 @@
+name: Download BTCUSDT 30s Data
+
+on:
+  schedule:
+    - cron: '0 12 * * *'   # 12:00 UTC mỗi ngày
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Cache daily data & checkpoint
+        uses: actions/cache@v4
+        with:
+          path: |
+            daily/
+            checkpoint.txt
+          key: btc-daily-${{ github.run_id }}
+          restore-keys: |
+            btc-daily-
+
+      - name: Run script
+        run: python btc30s.py
+
+      - name: Upload final CSV
+        uses: actions/upload-artifact@v4
+        with:
+          name: BTCUSDT-30s-data
+          path: BTCUSDT_30s_full.csv
