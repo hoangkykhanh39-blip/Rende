@@ -2,7 +2,7 @@ name: Download BTCUSDT 30s Data
 
 on:
   schedule:
-    - cron: '0 12 * * *'   # 12:00 UTC mỗi ngày
+    - cron: '0 */2 * * *'   # Chạy mỗi 2 giờ để nhanh chóng tiếp tục nếu bị ngắt
   workflow_dispatch:
 
 jobs:
@@ -22,20 +22,46 @@ jobs:
       - name: Install dependencies
         run: pip install requests
 
-      - name: Cache daily data & checkpoint
-        uses: actions/cache@v4
+      # Khôi phục trạng thái từ cache (nếu có)
+      - name: Restore cached state
+        uses: actions/cache/restore@v4
+        id: cache-restore
         with:
           path: |
             daily/
             checkpoint.txt
-          key: btc-daily-${{ github.run_id }}
-          restore-keys: |
-            btc-daily-
+            completed.flag
+          key: btc-daily-state
 
+      # Kiểm tra đã hoàn thành chưa
+      - name: Check if already completed
+        id: check
+        run: |
+          if [ -f completed.flag ]; then
+            echo "COMPLETED=true" >> $GITHUB_ENV
+          else
+            echo "COMPLETED=false" >> $GITHUB_ENV
+          fi
+
+      # Chạy script (chỉ khi chưa hoàn thành)
       - name: Run script
+        if: env.COMPLETED == 'false'
         run: python btc30s.py
 
+      # Luôn lưu cache (kể cả khi script lỗi hay bị cancel)
+      - name: Save state to cache (always)
+        if: always() && env.COMPLETED == 'false'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            daily/
+            checkpoint.txt
+            completed.flag
+          key: btc-daily-state
+
+      # Upload file CSV tổng (chỉ khi script thành công)
       - name: Upload final CSV
+        if: success() && env.COMPLETED == 'false'
         uses: actions/upload-artifact@v4
         with:
           name: BTCUSDT-30s-data
