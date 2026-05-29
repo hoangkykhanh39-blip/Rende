@@ -5,16 +5,14 @@ from collections import deque
 
 # ===== CẤU HÌNH =====
 SYMBOL = "BTCUSDT"
-OUTPUT_RAW_FILE = "BTCUSDT_30s_raw.csv"
 OUTPUT_ULTIMATE_FILE = "BTCUSDT_30s_5Y_Ultimate_Indicators.csv"
 DAILY_DIR = "daily"
 CHECKPOINT_FILE = "checkpoint.txt"
 LOG_FILE = "download.log"
-MAX_WORKERS = 10
+MAX_WORKERS = 15          # Tăng lên 15 để tải nhanh hết mức
 MAX_RETRIES = 3
 YEARS_BACK = 5
 END_DATE_OFFSET = 2
-BATCH_SIZE = 30           # Số ngày tối đa mỗi lần chạy
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 LOCALE = os.environ.get("LOCALE", "vi")
@@ -30,8 +28,7 @@ LANGUAGES = {
         "complete": "🎉 Hoàn tất! File: {file} | Thời gian: {elapsed:.1f}s",
         "completed_flag": "🏁 Đã tạo completed.flag – workflow sẽ không chạy lại.",
         "error_fatal": "💥 LỖI NGHIÊM TRỌNG: {error}",
-        "worker_timeout": "⏰ Worker cho {date} bị timeout sau {timeout}s, hủy bỏ.",
-        "batch_done": "📦 Đã xong đợt này, checkpoint đã lưu. Sẽ tiếp tục lần sau."
+        "worker_timeout": "⏰ Worker cho {date} bị timeout sau {timeout}s, hủy bỏ."
     },
     "en": {
         "health_ok": "✅ Connected to Binance successfully.",
@@ -41,8 +38,7 @@ LANGUAGES = {
         "complete": "🎉 Done! File: {file} | Time: {elapsed:.1f}s",
         "completed_flag": "🏁 Completed flag created.",
         "error_fatal": "💥 FATAL ERROR: {error}",
-        "worker_timeout": "⏰ Worker for {date} timed out after {timeout}s, cancelling.",
-        "batch_done": "📦 Batch finished, checkpoint saved. Will continue next run."
+        "worker_timeout": "⏰ Worker for {date} timed out after {timeout}s, cancelling."
     }
 }
 
@@ -288,24 +284,16 @@ def main():
                     f.write(f"Completed at {datetime.now()}\n")
             return
 
-        # Giới hạn số ngày tải trong lần này (BATCH_SIZE)
-        batch_end_date = min(
-            end_date,
-            datetime.combine(resume_date, datetime.min.time()).replace(tzinfo=timezone.utc) + timedelta(days=BATCH_SIZE - 1)
-        )
+        # Chuẩn bị danh sách đầy đủ các ngày còn thiếu (không giới hạn batch)
         dates_to_do = []
         d = datetime.combine(resume_date, datetime.min.time()).replace(tzinfo=timezone.utc)
-        while d <= batch_end_date:
+        while d <= end_date:
             dates_to_do.append(d)
             d += timedelta(days=1)
         total_todo = len(dates_to_do)
 
-        if total_todo == 0:
-            logger.info("Không có ngày nào cần tải trong đợt này.")
-            return
-
         logger.info(_("starting", total=total_todo, workers=MAX_WORKERS,
-                      start=resume_date, end=batch_end_date.date()))
+                      start=resume_date, end=end_date.date()))
 
         # last_close từ ngày trước
         last_close = None
@@ -321,6 +309,7 @@ def main():
                 except Exception as e:
                     logger.warning(f"Không đọc được last_close từ {prev_file}: {e}")
 
+        # Tải song song
         results = {}
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
             future_to_date = {}
@@ -341,9 +330,10 @@ def main():
                     logger.error(f"Worker ngày {dt.date()} gặp lỗi: {e}")
                     results[dt] = (None, str(e))
                 done += 1
-                if done % 10 == 0 or done == total_todo:
+                if done % 50 == 0 or done == total_todo:   # In mốc 50 vì tổng lớn
                     logger.info(_("progress", done=done, total=total_todo))
 
+        # Ghi tuần tự
         for idx, dt in enumerate(dates_to_do):
             date_str = dt.strftime("%Y-%m-%d")
             daily_file = os.path.join(DAILY_DIR, date_str + ".csv")
@@ -361,9 +351,8 @@ def main():
             remaining = total_todo - (idx + 1)
             logger.info(_("save_daily", date=date_str, remaining=remaining))
 
-        logger.info(_("batch_done"))
-
-        if batch_end_date >= end_date:
+        # Sau khi xong tất cả
+        if resume_date <= end_date.date():  # thực tế luôn đúng vì đã xử lý đến end_date
             merge_daily_files_and_compute_indicators()
             with open("completed.flag", "w") as f:
                 f.write(f"Completed at {datetime.now()}\n")
