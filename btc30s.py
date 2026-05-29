@@ -10,7 +10,7 @@ DAILY_DIR = "daily"
 CHECKPOINT_FILE = "checkpoint.txt"
 LOG_FILE = "download.log"
 MAX_RETRIES = 3
-YEARS_BACK = 3                  # ← ĐÃ SỬA TỪ 5 THÀNH 3 NĂM
+YEARS_BACK = 3
 END_DATE_OFFSET = 2
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
@@ -343,7 +343,8 @@ def main():
             else:
                 # Đọc kết quả từ queue
                 try:
-                    _, candles, err = result_queue.get_nowait()
+                    # SỬA LỖI: đổi tên biến _ thành date_res
+                    date_res, candles, err = result_queue.get_nowait()
                 except:
                     candles, err = None, "Lỗi không xác định"
                 last_close = save_daily(date_str, candles, last_close)
