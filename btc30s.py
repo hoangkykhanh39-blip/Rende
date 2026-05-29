@@ -1,44 +1,41 @@
 import csv, time, zipfile, io, os, logging, requests, sys, tempfile
 from datetime import datetime, timedelta, timezone
-from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
 from collections import deque
+import multiprocessing as mp
 
 # ===== CẤU HÌNH =====
 SYMBOL = "BTCUSDT"
-OUTPUT_ULTIMATE_FILE = "BTCUSDT_30s_5Y_Ultimate_Indicators.csv"
+OUTPUT_ULTIMATE_FILE = "BTCUSDT_30s_3Y_Ultimate_Indicators.csv"
 DAILY_DIR = "daily"
 CHECKPOINT_FILE = "checkpoint.txt"
 LOG_FILE = "download.log"
-MAX_WORKERS = 15          # Tăng lên 15 để tải nhanh hết mức
 MAX_RETRIES = 3
-YEARS_BACK = 5
+YEARS_BACK = 3                     # Đã sửa từ 5 → 3
 END_DATE_OFFSET = 2
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 LOCALE = os.environ.get("LOCALE", "vi")
-WORKER_TIMEOUT = 300
+PROCESS_TIMEOUT = 300
 # ===================
 
 LANGUAGES = {
     "vi": {
         "health_ok": "✅ Kết nối Binance thành công.",
-        "starting": "🚀 Bắt đầu tải {total} ngày ({workers} luồng) – từ {start} đến {end}",
-        "progress": "📥 Đã tải: {done}/{total} ngày",
-        "save_daily": "✔ {date} | còn {remaining} ngày",
+        "starting": "🚀 Bắt đầu tải {total} ngày – từ {start} đến {end}",
+        "progress": "📥 {date} | Đã tải: {done}/{total} | còn {remaining} ngày",
         "complete": "🎉 Hoàn tất! File: {file} | Thời gian: {elapsed:.1f}s",
         "completed_flag": "🏁 Đã tạo completed.flag – workflow sẽ không chạy lại.",
         "error_fatal": "💥 LỖI NGHIÊM TRỌNG: {error}",
-        "worker_timeout": "⏰ Worker cho {date} bị timeout sau {timeout}s, hủy bỏ."
+        "process_timeout": "⏰ Timeout cho ngày {date}, hủy bỏ và fill bằng last_close."
     },
     "en": {
         "health_ok": "✅ Connected to Binance successfully.",
-        "starting": "🚀 Starting download of {total} days ({workers} threads) – from {start} to {end}",
-        "progress": "📥 Downloaded: {done}/{total} days",
-        "save_daily": "✔ {date} | {remaining} days left",
+        "starting": "🚀 Starting download of {total} days – from {start} to {end}",
+        "progress": "📥 {date} | Downloaded: {done}/{total} | {remaining} days left",
         "complete": "🎉 Done! File: {file} | Time: {elapsed:.1f}s",
         "completed_flag": "🏁 Completed flag created.",
         "error_fatal": "💥 FATAL ERROR: {error}",
-        "worker_timeout": "⏰ Worker for {date} timed out after {timeout}s, cancelling."
+        "process_timeout": "⏰ Timeout for {date}, cancelling and filling with last_close."
     }
 }
 
@@ -65,72 +62,77 @@ def health_check():
         logger.error(f"Không kết nối được Binance: {e}")
         return False
 
-def download_and_process(date_str):
-    url = f"https://data.binance.vision/data/spot/daily/aggTrades/{SYMBOL}/{SYMBOL}-aggTrades-{date_str}.zip"
-    raw_zip = None
-    with requests.Session() as session:
-        session.headers.update({'User-Agent': 'Mozilla/5.0'})
-        for attempt in range(1, MAX_RETRIES + 1):
-            try:
-                resp = session.get(url, timeout=30)
-                if resp.status_code == 200:
-                    raw_zip = resp.content
-                    break
-                elif resp.status_code == 404:
-                    return (date_str, None, "404")
-                elif resp.status_code == 429:
-                    wait = min(60, 15 * attempt)
-                    logger.warning(f"429 {date_str} (lần {attempt}) -> đợi {wait}s")
-                    time.sleep(wait)
-                else:
-                    time.sleep(3)
-            except requests.RequestException as e:
-                logger.warning(f"Lỗi mạng {date_str} (lần {attempt}): {e}")
-                time.sleep(5 * attempt)
-    if raw_zip is None:
-        return (date_str, None, f"Thất bại sau {MAX_RETRIES} lần thử")
-    candles = {}
+def process_day(date_str, result_queue):
     try:
-        with zipfile.ZipFile(io.BytesIO(raw_zip)) as z:
-            file_list = z.namelist()
-            if not file_list:
-                return (date_str, None, "ZIP rỗng")
-            with z.open(file_list[0]) as csv_file:
-                reader = csv.reader(io.TextIOWrapper(csv_file, encoding="utf-8"))
-                for row in reader:
-                    if len(row) < 6:
-                        continue
-                    try:
-                        price = float(row[1])
-                        qty = float(row[2])
-                        ts = int(row[5])
-                        quote_qty = float(row[3]) if len(row) > 3 else 0.0
-                        is_buyer_maker = row[6].strip().lower() == 'true' if len(row) > 6 else False
-                    except (ValueError, IndexError):
-                        continue
-                    ts_30s = (ts // 30000) * 30000
-                    if ts_30s not in candles:
-                        candles[ts_30s] = {
-                            "o": price, "h": price, "l": price, "c": price,
-                            "v": 0.0, "qv": 0.0, "n": 0,
-                            "vwap_sum": 0.0, "tbv": 0.0, "tbqv": 0.0
-                        }
-                    c = candles[ts_30s]
-                    c["h"] = max(c["h"], price)
-                    c["l"] = min(c["l"], price)
-                    c["c"] = price
-                    c["v"] += qty
-                    c["qv"] += quote_qty
-                    c["n"] += 1
-                    c["vwap_sum"] += price * qty
-                    if not is_buyer_maker:
-                        c["tbv"] += qty
-                        c["tbqv"] += quote_qty
-        return (date_str, candles, None)
-    except zipfile.BadZipFile:
-        return (date_str, None, "ZIP hỏng")
+        url = f"https://data.binance.vision/data/spot/daily/aggTrades/{SYMBOL}/{SYMBOL}-aggTrades-{date_str}.zip"
+        raw_zip = None
+        with requests.Session() as session:
+            session.headers.update({'User-Agent': 'Mozilla/5.0'})
+            for attempt in range(1, MAX_RETRIES + 1):
+                try:
+                    resp = session.get(url, timeout=30)
+                    if resp.status_code == 200:
+                        raw_zip = resp.content
+                        break
+                    elif resp.status_code == 404:
+                        result_queue.put((date_str, None, "404"))
+                        return
+                    elif resp.status_code == 429:
+                        wait = min(60, 15 * attempt)
+                        time.sleep(wait)
+                    else:
+                        time.sleep(3)
+                except requests.RequestException as e:
+                    time.sleep(5 * attempt)
+        if raw_zip is None:
+            result_queue.put((date_str, None, f"Thất bại sau {MAX_RETRIES} lần thử"))
+            return
+
+        candles = {}
+        try:
+            with zipfile.ZipFile(io.BytesIO(raw_zip)) as z:
+                file_list = z.namelist()
+                if not file_list:
+                    result_queue.put((date_str, None, "ZIP rỗng"))
+                    return
+                with z.open(file_list[0]) as csv_file:
+                    reader = csv.reader(io.TextIOWrapper(csv_file, encoding="utf-8"))
+                    for row in reader:
+                        if len(row) < 6:
+                            continue
+                        try:
+                            price = float(row[1])
+                            qty = float(row[2])
+                            ts = int(row[5])
+                            quote_qty = float(row[3]) if len(row) > 3 else 0.0
+                            is_buyer_maker = row[6].strip().lower() == 'true' if len(row) > 6 else False
+                        except (ValueError, IndexError):
+                            continue
+                        ts_30s = (ts // 30000) * 30000
+                        if ts_30s not in candles:
+                            candles[ts_30s] = {
+                                "o": price, "h": price, "l": price, "c": price,
+                                "v": 0.0, "qv": 0.0, "n": 0,
+                                "vwap_sum": 0.0, "tbv": 0.0, "tbqv": 0.0
+                            }
+                        c = candles[ts_30s]
+                        c["h"] = max(c["h"], price)
+                        c["l"] = min(c["l"], price)
+                        c["c"] = price
+                        c["v"] += qty
+                        c["qv"] += quote_qty
+                        c["n"] += 1
+                        c["vwap_sum"] += price * qty
+                        if not is_buyer_maker:
+                            c["tbv"] += qty
+                            c["tbqv"] += quote_qty
+            result_queue.put((date_str, candles, None))
+        except zipfile.BadZipFile:
+            result_queue.put((date_str, None, "ZIP hỏng"))
+        except Exception as e:
+            result_queue.put((date_str, None, str(e)))
     except Exception as e:
-        return (date_str, None, str(e))
+        result_queue.put((date_str, None, f"Lỗi tiến trình: {e}"))
 
 def is_daily_file_valid(filepath):
     if not os.path.exists(filepath):
@@ -247,7 +249,6 @@ def main():
 
         os.makedirs(DAILY_DIR, exist_ok=True)
 
-        # Checkpoint
         last_done_date = None
         if os.path.exists(CHECKPOINT_FILE):
             with open(CHECKPOINT_FILE, "r") as f:
@@ -284,7 +285,6 @@ def main():
                     f.write(f"Completed at {datetime.now()}\n")
             return
 
-        # Chuẩn bị danh sách đầy đủ các ngày còn thiếu (không giới hạn batch)
         dates_to_do = []
         d = datetime.combine(resume_date, datetime.min.time()).replace(tzinfo=timezone.utc)
         while d <= end_date:
@@ -292,10 +292,8 @@ def main():
             d += timedelta(days=1)
         total_todo = len(dates_to_do)
 
-        logger.info(_("starting", total=total_todo, workers=MAX_WORKERS,
-                      start=resume_date, end=end_date.date()))
+        logger.info(_("starting", total=total_todo, start=resume_date, end=end_date.date()))
 
-        # last_close từ ngày trước
         last_close = None
         if resume_date > start_date.date():
             prev_date = datetime.combine(resume_date, datetime.min.time()) - timedelta(days=1)
@@ -309,31 +307,6 @@ def main():
                 except Exception as e:
                     logger.warning(f"Không đọc được last_close từ {prev_file}: {e}")
 
-        # Tải song song
-        results = {}
-        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-            future_to_date = {}
-            for dt in dates_to_do:
-                future = executor.submit(download_and_process, dt.strftime("%Y-%m-%d"))
-                future_to_date[future] = dt
-
-            done = 0
-            for future in as_completed(future_to_date):
-                dt = future_to_date[future]
-                try:
-                    date_str, candles, err = future.result(timeout=WORKER_TIMEOUT)
-                    results[dt] = (candles, err)
-                except TimeoutError:
-                    logger.error(_("worker_timeout", date=dt.date(), timeout=WORKER_TIMEOUT))
-                    results[dt] = (None, f"Timeout sau {WORKER_TIMEOUT}s")
-                except Exception as e:
-                    logger.error(f"Worker ngày {dt.date()} gặp lỗi: {e}")
-                    results[dt] = (None, str(e))
-                done += 1
-                if done % 50 == 0 or done == total_todo:   # In mốc 50 vì tổng lớn
-                    logger.info(_("progress", done=done, total=total_todo))
-
-        # Ghi tuần tự
         for idx, dt in enumerate(dates_to_do):
             date_str = dt.strftime("%Y-%m-%d")
             daily_file = os.path.join(DAILY_DIR, date_str + ".csv")
@@ -346,17 +319,36 @@ def main():
                 except:
                     pass
                 continue
-            candles, err = results.get(dt, (None, "missing"))
-            last_close = save_daily(date_str, candles, last_close)
-            remaining = total_todo - (idx + 1)
-            logger.info(_("save_daily", date=date_str, remaining=remaining))
 
-        # Sau khi xong tất cả
-        if resume_date <= end_date.date():  # thực tế luôn đúng vì đã xử lý đến end_date
-            merge_daily_files_and_compute_indicators()
-            with open("completed.flag", "w") as f:
-                f.write(f"Completed at {datetime.now()}\n")
-            logger.info(_("completed_flag"))
+            result_queue = mp.Queue()
+            p = mp.Process(target=process_day, args=(date_str, result_queue))
+            p.start()
+            p.join(PROCESS_TIMEOUT)
+
+            if p.is_alive():
+                p.terminate()
+                p.join()
+                logger.error(_("process_timeout", date=date_str))
+                last_close = save_daily(date_str, None, last_close)
+            else:
+                try:
+                    _, candles, err = result_queue.get_nowait()
+                except:
+                    candles, err = None, "Lỗi không xác định"
+                last_close = save_daily(date_str, candles, last_close)
+                if err:
+                    logger.warning(f"   {date_str} lỗi: {err}")
+
+            remaining = total_todo - (idx + 1)
+            logger.info(_("progress", date=date_str, done=idx+1, total=total_todo, remaining=remaining))
+
+        merge_daily_files_and_compute_indicators()
+        with open("completed.flag", "w") as f:
+            f.write(f"Completed at {datetime.now()}\n")
+        logger.info(_("completed_flag"))
+
+        elapsed = time.time() - start_time
+        logger.info(_("complete", file=OUTPUT_ULTIMATE_FILE, elapsed=elapsed))
 
     except Exception as e:
         logger.exception(_("error_fatal", error=e))
