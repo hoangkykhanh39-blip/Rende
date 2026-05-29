@@ -14,17 +14,20 @@ import requests
 
 # ===== CẤU HÌNH =====
 SYMBOL = "BTCUSDT"
-OUTPUT_ULTIMATE_FILE = "BTCUSDT_30s_3Y_Ultimate_Indicators.csv"
+YEARS_BACK = 3
+END_DATE_OFFSET = 2
+
+OUTPUT_ULTIMATE_FILE = f"{SYMBOL}_30s_{YEARS_BACK}Y_Ultimate_Indicators.csv"
 DAILY_DIR = "daily"
 CHECKPOINT_FILE = "checkpoint.txt"
 LOG_FILE = "download.log"
+
 MAX_RETRIES = 3
-YEARS_BACK = 3
-END_DATE_OFFSET = 2
+PROCESS_TIMEOUT = 300  # 5 phút cho mỗi ngày
+
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 LOCALE = os.environ.get("LOCALE", "vi")
-PROCESS_TIMEOUT = 300  # 5 phút cho mỗi ngày
 # ===================
 
 LANGUAGES = {
@@ -49,7 +52,7 @@ LANGUAGES = {
 }
 
 
-def _(key, **kwargs):
+def t(key, **kwargs):
     return LANGUAGES.get(LOCALE, LANGUAGES["vi"]).get(key, key).format(**kwargs)
 
 
@@ -68,7 +71,7 @@ def health_check():
     try:
         resp = requests.head("https://data.binance.vision/", timeout=10)
         if resp.status_code == 200:
-            logger.info(_("health_ok"))
+            logger.info(t("health_ok"))
             return True
         logger.error(f"Máy chủ Binance trả về mã {resp.status_code}")
         return False
@@ -83,8 +86,8 @@ def process_day(date_str, result_queue):
             f"https://data.binance.vision/data/spot/daily/aggTrades/"
             f"{SYMBOL}/{SYMBOL}-aggTrades-{date_str}.zip"
         )
-        raw_zip = None
 
+        raw_zip = None
         with requests.Session() as session:
             session.headers.update({"User-Agent": "Mozilla/5.0"})
             for attempt in range(1, MAX_RETRIES + 1):
@@ -127,7 +130,9 @@ def process_day(date_str, result_queue):
                             qty = float(row[2])
                             ts = int(row[5])
                             quote_qty = float(row[3]) if len(row) > 3 else 0.0
-                            is_buyer_maker = row[6].strip().lower() == "true" if len(row) > 6 else False
+                            is_buyer_maker = (
+                                row[6].strip().lower() == "true" if len(row) > 6 else False
+                            )
                         except (ValueError, IndexError):
                             continue
 
@@ -199,7 +204,19 @@ def save_daily(date_str, candles, last_close):
                     "%Y-%m-%d %H:%M:%S"
                 )
                 rows.append(
-                    [dt, last_close, last_close, last_close, last_close, 0.0, 0.0, 0, last_close, 0.0, 0.0]
+                    [
+                        dt,
+                        last_close,
+                        last_close,
+                        last_close,
+                        last_close,
+                        0.0,
+                        0.0,
+                        0,
+                        last_close,
+                        0.0,
+                        0.0,
+                    ]
                 )
         else:
             logger.warning(f"Bỏ qua {date_str} vì chưa có last_close")
@@ -225,7 +242,9 @@ def save_daily(date_str, candles, last_close):
                     "tbqv": 0.0,
                 }
 
-            dt = datetime.fromtimestamp(ts / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+            dt = datetime.fromtimestamp(ts / 1000, tz=timezone.utc).strftime(
+                "%Y-%m-%d %H:%M:%S"
+            )
             vwap = c["vwap_sum"] / c["v"] if c["v"] > 0 else c["o"]
             rows.append(
                 [
@@ -377,7 +396,9 @@ def main():
         if last_done_date:
             resume_date = last_done_date + timedelta(days=1)
             while True:
-                daily_file = os.path.join(DAILY_DIR, resume_date.strftime("%Y-%m-%d") + ".csv")
+                daily_file = os.path.join(
+                    DAILY_DIR, resume_date.strftime("%Y-%m-%d") + ".csv"
+                )
                 if os.path.exists(daily_file) and is_daily_file_valid(daily_file):
                     logger.info(f"⏩ Ngày {resume_date} đã có file hợp lệ, bỏ qua.")
                     last_done_date = resume_date
@@ -406,7 +427,7 @@ def main():
             d += timedelta(days=1)
 
         total_todo = len(dates_to_do)
-        logger.info(_("starting", total=total_todo, start=resume_date, end=end_date.date()))
+        logger.info(t("starting", total=total_todo, start=resume_date, end=end_date.date()))
 
         last_close = None
         if resume_date > start_date.date():
@@ -443,7 +464,7 @@ def main():
             if p.is_alive():
                 p.terminate()
                 p.join()
-                logger.error(_("process_timeout", date=date_str))
+                logger.error(t("process_timeout", date=date_str))
                 last_close = save_daily(date_str, None, last_close)
             else:
                 try:
@@ -456,20 +477,20 @@ def main():
                     logger.warning(f"   {date_str} lỗi: {err}")
 
             remaining = total_todo - (idx + 1)
-            logger.info(_("progress", date=date_str, done=idx + 1, total=total_todo, remaining=remaining))
+            logger.info(t("progress", date=date_str, done=idx + 1, total=total_todo, remaining=remaining))
 
         merge_daily_files_and_compute_indicators()
 
         with open("completed.flag", "w") as f:
             f.write(f"Completed at {datetime.now()}\n")
 
-        logger.info(_("completed_flag"))
+        logger.info(t("completed_flag"))
 
         elapsed = time.time() - start_time
-        logger.info(_("complete", file=OUTPUT_ULTIMATE_FILE, elapsed=elapsed))
+        logger.info(t("complete", file=OUTPUT_ULTIMATE_FILE, elapsed=elapsed))
 
     except Exception as e:
-        logger.exception(_("error_fatal", error=e))
+        logger.exception(t("error_fatal", error=e))
         sys.exit(1)
 
 
