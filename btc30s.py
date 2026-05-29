@@ -5,17 +5,17 @@ import multiprocessing as mp
 
 # ===== CẤU HÌNH =====
 SYMBOL = "BTCUSDT"
-OUTPUT_ULTIMATE_FILE = "BTCUSDT_30s_3Y_Ultimate_Indicators.csv"
+OUTPUT_ULTIMATE_FILE = "BTCUSDT_30s_5Y_Ultimate_Indicators.csv"
 DAILY_DIR = "daily"
 CHECKPOINT_FILE = "checkpoint.txt"
 LOG_FILE = "download.log"
 MAX_RETRIES = 3
-YEARS_BACK = 3
+YEARS_BACK = 3                  # ← ĐÃ SỬA TỪ 5 THÀNH 3 NĂM
 END_DATE_OFFSET = 2
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 LOCALE = os.environ.get("LOCALE", "vi")
-PROCESS_TIMEOUT = 300
+PROCESS_TIMEOUT = 300   # 5 phút cho mỗi ngày
 # ===================
 
 LANGUAGES = {
@@ -39,7 +39,7 @@ LANGUAGES = {
     }
 }
 
-def translate(key, **kwargs):
+def _(key, **kwargs):
     return LANGUAGES.get(LOCALE, LANGUAGES["vi"]).get(key, key).format(**kwargs)
 
 logging.basicConfig(
@@ -53,7 +53,7 @@ def health_check():
     try:
         resp = requests.head("https://data.binance.vision/", timeout=10)
         if resp.status_code == 200:
-            logger.info(translate("health_ok"))
+            logger.info(_("health_ok"))
             return True
         else:
             logger.error(f"Máy chủ Binance trả về mã {resp.status_code}")
@@ -62,6 +62,7 @@ def health_check():
         logger.error(f"Không kết nối được Binance: {e}")
         return False
 
+# Hàm này sẽ chạy trong tiến trình con
 def process_day(date_str, result_queue):
     try:
         url = f"https://data.binance.vision/data/spot/daily/aggTrades/{SYMBOL}/{SYMBOL}-aggTrades-{date_str}.zip"
@@ -88,6 +89,7 @@ def process_day(date_str, result_queue):
             result_queue.put((date_str, None, f"Thất bại sau {MAX_RETRIES} lần thử"))
             return
 
+        # Giải nén & xử lý
         candles = {}
         try:
             with zipfile.ZipFile(io.BytesIO(raw_zip)) as z:
@@ -249,6 +251,7 @@ def main():
 
         os.makedirs(DAILY_DIR, exist_ok=True)
 
+        # Checkpoint
         last_done_date = None
         if os.path.exists(CHECKPOINT_FILE):
             with open(CHECKPOINT_FILE, "r") as f:
@@ -285,6 +288,7 @@ def main():
                     f.write(f"Completed at {datetime.now()}\n")
             return
 
+        # Chuẩn bị danh sách tất cả ngày còn thiếu
         dates_to_do = []
         d = datetime.combine(resume_date, datetime.min.time()).replace(tzinfo=timezone.utc)
         while d <= end_date:
@@ -292,8 +296,9 @@ def main():
             d += timedelta(days=1)
         total_todo = len(dates_to_do)
 
-        logger.info(translate("starting", total=total_todo, start=resume_date, end=end_date.date()))
+        logger.info(_("starting", total=total_todo, start=resume_date, end=end_date.date()))
 
+        # Lấy last_close từ ngày trước đó
         last_close = None
         if resume_date > start_date.date():
             prev_date = datetime.combine(resume_date, datetime.min.time()) - timedelta(days=1)
@@ -307,10 +312,12 @@ def main():
                 except Exception as e:
                     logger.warning(f"Không đọc được last_close từ {prev_file}: {e}")
 
+        # Xử lý từng ngày một bằng Process riêng biệt
         for idx, dt in enumerate(dates_to_do):
             date_str = dt.strftime("%Y-%m-%d")
             daily_file = os.path.join(DAILY_DIR, date_str + ".csv")
             if os.path.exists(daily_file) and is_daily_file_valid(daily_file):
+                # Cập nhật last_close từ file này
                 try:
                     with open(daily_file, "r") as f:
                         last_line = deque(csv.reader(f), maxlen=1)
@@ -320,17 +327,21 @@ def main():
                     pass
                 continue
 
+            # Tạo queue để nhận kết quả từ tiến trình con
             result_queue = mp.Queue()
             p = mp.Process(target=process_day, args=(date_str, result_queue))
             p.start()
             p.join(PROCESS_TIMEOUT)
 
             if p.is_alive():
+                # Timeout
                 p.terminate()
                 p.join()
-                logger.error(translate("process_timeout", date=date_str))
+                logger.error(_("process_timeout", date=date_str))
+                # Coi như lỗi, fill forward
                 last_close = save_daily(date_str, None, last_close)
             else:
+                # Đọc kết quả từ queue
                 try:
                     _, candles, err = result_queue.get_nowait()
                 except:
@@ -340,18 +351,19 @@ def main():
                     logger.warning(f"   {date_str} lỗi: {err}")
 
             remaining = total_todo - (idx + 1)
-            logger.info(translate("progress", date=date_str, done=idx+1, total=total_todo, remaining=remaining))
+            logger.info(_("progress", date=date_str, done=idx+1, total=total_todo, remaining=remaining))
 
+        # Sau khi đã xử lý hết các ngày còn lại
         merge_daily_files_and_compute_indicators()
         with open("completed.flag", "w") as f:
             f.write(f"Completed at {datetime.now()}\n")
-        logger.info(translate("completed_flag"))
+        logger.info(_("completed_flag"))
 
         elapsed = time.time() - start_time
-        logger.info(translate("complete", file=OUTPUT_ULTIMATE_FILE, elapsed=elapsed))
+        logger.info(_("complete", file=OUTPUT_ULTIMATE_FILE, elapsed=elapsed))
 
     except Exception as e:
-        logger.exception(translate("error_fatal", error=e))
+        logger.exception(_("error_fatal", error=e))
         sys.exit(1)
 
 if __name__ == "__main__":
