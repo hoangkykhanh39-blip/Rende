@@ -1,23 +1,20 @@
-name: BTCUSDT 30s 5Y Ultimate
+name: BTCUSDT 30s 5Y Batched
 
 on:
   schedule:
-    - cron: '0 12 * * *'   # Chạy mỗi ngày lúc 12:00 UTC
+    - cron: '0 */2 * * *'   # Mỗi 2 giờ
   workflow_dispatch:
-    inputs:
-      retry_count:
-        description: 'Số lần retry'
-        required: false
-        default: '0'
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 360   # tối đa 6 tiếng
+    timeout-minutes: 30
 
     steps:
-      - name: Checkout
+      - name: Checkout repo
         uses: actions/checkout@v4
+        with:
+          persist-credentials: true
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -25,71 +22,28 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install requests
+        run: pip install requests pandas pandas_ta
 
-      - name: Restore cache
-        uses: actions/cache/restore@v4
-        id: cache-restore
-        with:
-          path: |
-            daily/
-            checkpoint.txt
-            completed.flag
-          key: btc-daily-state
-
-      - name: Set retry count
-        id: vars
-        run: |
-          RETRY="${{ github.event.inputs.retry_count }}"
-          if [ -z "$RETRY" ]; then RETRY=0; fi
-          echo "RETRY_COUNT=$RETRY" >> $GITHUB_ENV
-          echo "Retry count: $RETRY"
-
-      - name: Check completed
-        id: check
-        run: |
-          if [ -f completed.flag ]; then
-            echo "COMPLETED=true" >> $GITHUB_ENV
-          else
-            echo "COMPLETED=false" >> $GITHUB_ENV
-          fi
-
-      - name: Run script
-        if: env.COMPLETED == 'false'
-        id: run-bot
+      - name: Run batch script
+        id: run-batch
         run: python btc30s.py
 
-      - name: Save cache (always)
-        if: always() && env.COMPLETED == 'false'
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            daily/
-            checkpoint.txt
-            completed.flag
-          key: btc-daily-state
+      - name: Commit and push progress
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add daily/ checkpoint.txt completed.flag 2>/dev/null || true
+          if git diff --staged --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "Update daily data & checkpoint [skip ci]"
+            git push
+          fi
 
-      - name: Upload artifact on success
-        if: success() && env.COMPLETED == 'false'
+      - name: Upload final CSV if completed
+        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: BTCUSDT-30s-5Y
-          path: BTCUSDT_30s_full.csv
-
-      - name: Auto-retry on failure
-        if: failure() && env.RETRY_COUNT < '3'
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GH_PAT }}
-          script: |
-            const retry = parseInt(process.env.RETRY_COUNT) + 1;
-            console.log(`Retry attempt ${retry}...`);
-            await github.rest.actions.createWorkflowDispatch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: 'btc_download.yml',
-              ref: context.ref,
-              inputs: {
-                retry_count: retry.toString()
-              }
-            });
+          name: BTCUSDT-30s-5Y-Ultimate
+          path: BTCUSDT_30s_5Y_Ultimate_Indicators.csv
