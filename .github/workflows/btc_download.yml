@@ -1,14 +1,14 @@
-name: BTCUSDT 30s 5Y Continuous
+name: BTCUSDT 30s 3Y Continuous
 
 on:
   schedule:
-    - cron: '0 */6 * * *'   # Mỗi 6 giờ
+    - cron: '0 */6 * * *'
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 360   # 6 tiếng
+    timeout-minutes: 360
 
     steps:
       - name: Checkout repo
@@ -22,10 +22,9 @@ jobs:
           python-version: '3.12'
 
       - name: Install dependencies
-        run: pip install requests pandas pandas-ta   # Sửa thành pandas-ta
+        run: pip install requests pandas pandas-ta
 
       - name: Run script
-        id: run-bot
         run: python btc30s.py
 
       - name: Commit daily progress & checkpoint
@@ -44,8 +43,8 @@ jobs:
       - name: Commit final CSV if created
         if: success()
         run: |
-          if [ -f BTCUSDT_30s_5Y_Ultimate_Indicators.csv ]; then
-            git add BTCUSDT_30s_5Y_Ultimate_Indicators.csv
+          if [ -f BTCUSDT_30s_3Y_Ultimate_Indicators.csv ]; then
+            git add BTCUSDT_30s_3Y_Ultimate_Indicators.csv
             if git diff --staged --quiet; then
               echo "CSV already committed."
             else
@@ -54,12 +53,12 @@ jobs:
             fi
           fi
 
-      - name: Upload artifact (always, nếu có file)
+      - name: Upload artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: BTCUSDT-30s-5Y-Ultimate
+          name: BTCUSDT-30s-3Y-Ultimate
           path: |
-            BTCUSDT_30s_5Y_Ultimate_Indicators.csv
+            BTCUSDT_30s_3Y_Ultimate_Indicators.csv
             checkpoint.txt
             daily/
