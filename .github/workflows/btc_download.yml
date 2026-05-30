@@ -1,4 +1,4 @@
-name: BTCUSDT 30s 3Y Continuous
+name: BTCUSDT 30s 3Y Raw Data
 
 on:
   schedule:
@@ -22,7 +22,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install dependencies
-        run: pip install requests pandas pandas-ta
+        run: pip install requests
 
       - name: Run script
         run: python btc30s.py
@@ -40,25 +40,12 @@ jobs:
             git push
           fi
 
-      - name: Commit final CSV if created
-        if: success()
-        run: |
-          if [ -f BTCUSDT_30s_3Y_Ultimate_Indicators.csv ]; then
-            git add BTCUSDT_30s_3Y_Ultimate_Indicators.csv
-            if git diff --staged --quiet; then
-              echo "CSV already committed."
-            else
-              git commit -m "Add final indicators CSV [skip ci]"
-              git push
-            fi
-          fi
-
-      - name: Upload artifact
+      - name: Upload artifact (CSV + daily)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: BTCUSDT-30s-3Y-Ultimate
+          name: BTCUSDT-30s-3Y-Raw
           path: |
-            BTCUSDT_30s_3Y_Ultimate_Indicators.csv
+            BTCUSDT_30s_3Y.csv
             checkpoint.txt
             daily/
