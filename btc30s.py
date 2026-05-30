@@ -87,6 +87,7 @@ def process_day(date_str, result_queue):
                         time.sleep(3)
                 except requests.RequestException as e:
                     time.sleep(5 * attempt)
+
         if raw_zip is None:
             result_queue.put((date_str, None, f"Thất bại sau {MAX_RETRIES} lần thử"))
             return
@@ -345,7 +346,7 @@ def main():
             else:
                 # Đọc kết quả từ queue
                 try:
-                    _, candles, err = result_queue.get_nowait()
+                    date_key, candles, err = result_queue.get_nowait()
                 except:
                     candles, err = None, "Lỗi không xác định"
                 last_close = save_daily(date_str, candles, last_close)
