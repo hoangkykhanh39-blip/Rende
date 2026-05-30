@@ -4,20 +4,18 @@ from collections import deque
 import multiprocessing as mp
 
 # ===== CẤU HÌNH =====
-
 SYMBOL = "BTCUSDT"
 OUTPUT_ULTIMATE_FILE = "BTCUSDT_30s_3Y_Ultimate_Indicators.csv"
 DAILY_DIR = "daily"
 CHECKPOINT_FILE = "checkpoint.txt"
 LOG_FILE = "download.log"
 MAX_RETRIES = 3
-YEARS_BACK = 3
+YEARS_BACK = 3                 # ← ĐÃ SỬA TỪ 5 THÀNH 3
 END_DATE_OFFSET = 2
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 LOCALE = os.environ.get("LOCALE", "vi")
 PROCESS_TIMEOUT = 300   # 5 phút cho mỗi ngày
-
 # ===================
 
 LANGUAGES = {
@@ -87,7 +85,6 @@ def process_day(date_str, result_queue):
                         time.sleep(3)
                 except requests.RequestException as e:
                     time.sleep(5 * attempt)
-
         if raw_zip is None:
             result_queue.put((date_str, None, f"Thất bại sau {MAX_RETRIES} lần thử"))
             return
@@ -346,7 +343,7 @@ def main():
             else:
                 # Đọc kết quả từ queue
                 try:
-                    date_key, candles, err = result_queue.get_nowait()
+                    _, candles, err = result_queue.get_nowait()
                 except:
                     candles, err = None, "Lỗi không xác định"
                 last_close = save_daily(date_str, candles, last_close)
