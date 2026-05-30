@@ -15,7 +15,7 @@ END_DATE_OFFSET = 2
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 LOCALE = os.environ.get("LOCALE", "vi")
-PROCESS_TIMEOUT = 300   # 5 phút cho mỗi ngày
+PROCESS_TIMEOUT = 600   # 10 phút cho mỗi ngày (tăng từ 300s)
 # ===================
 
 LANGUAGES = {
